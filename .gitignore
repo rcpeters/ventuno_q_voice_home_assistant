@@ -1,0 +1,41 @@
+# Environment variables & secrets (keep .env.example tracked)
+.env
+.env.*
+!.env.example
+
+# Python bytecode & caches
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Arduino / C++ build artifacts
+build/
+.arduino/
+*.bin
+*.elf
+*.hex
+*.map
+
+# Temporary audio & runtime files
+*.wav
+/tmp/
+*.log
+
+# IDE & OS files
+.vscode/
+.idea/
+*.code-workspace
+.DS_Store
+Thumbs.db
+Desktop.ini
