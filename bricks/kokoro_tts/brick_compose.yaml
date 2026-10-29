@@ -1,0 +1,23 @@
+services:
+  kokoro_tts:
+    build:
+      context: ${APP_HOME}/bricks/kokoro_tts/container
+    restart: unless-stopped
+    environment:
+      KOKORO_MODEL: ${KOKORO_MODEL:-fp16}
+      KOKORO_THREADS: ${KOKORO_THREADS:-4}
+      KOKORO_VOICE: ${KOKORO_VOICE:-af_heart}
+      KOKORO_PORT: "9100"
+    expose:
+      - "9100"
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9100/health',timeout=2).status==200 else 1)"]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+      start_period: 30s

@@ -1,0 +1,11 @@
+name: Ventuno-Q-Voice-Home-Assistant
+description: Privacy-first Smart Home Voice Assistant with Keyword Spotting, ASR, Local LLM, Home Assistant Light Control, and Kokoro TTS.
+ports: []
+bricks:
+- arduino:llm: {}
+- arduino:asr: {}
+- arduino:keyword_spotting:
+    model: ei-model-985298-1
+- kokoro_tts: {}
+- home_assistant_mapping: {}
+icon: 🏠

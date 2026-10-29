@@ -4,12 +4,12 @@ A 100% local, privacy-first smart home voice assistant built with **Arduino App 
 
 ## Project Structure
 
-- [`app.yaml`](file:///C:/Users/info/Documents/Antigravity/Venturo%20Home%20Assistent/app.yaml): Arduino App Lab project manifest declaring built-in and custom bricks.
-- [`.env.example`](file:///C:/Users/info/Documents/Antigravity/Venturo%20Home%20Assistent/.env.example) / [`.env`](file:///C:/Users/info/Documents/Antigravity/Venturo%20Home%20Assistent/.env): Local configuration for Home Assistant URL, Long-Lived Access Token, timezone, and audio hardware.
-- [`bricks/home_assistant_mapping/`](file:///C:/Users/info/Documents/Antigravity/Venturo%20Home%20Assistent/bricks/home_assistant_mapping/__init__.py): Custom pure-Python brick that fetches live `light.*` entity states from Home Assistant, injects context into the local LLM, parses single-pass JSON output, and executes Home Assistant REST service calls (`light.turn_on`, `light.turn_off`, `light.toggle`).
-- [`bricks/kokoro_tts/`](file:///C:/Users/info/Documents/Antigravity/Venturo%20Home%20Assistent/bricks/kokoro_tts/__init__.py): Custom containerized brick running the local Kokoro-82M ONNX TTS engine.
-- [`python/main.py`](file:///C:/Users/info/Documents/Antigravity/Venturo%20Home%20Assistent/python/main.py): Main orchestrator loop managing wake word detection, streaming ASR, Home Assistant context injection, LLM inference, light control execution, and TTS playback.
-- [`sketch/sketch.ino`](file:///C:/Users/info/Documents/Antigravity/Venturo%20Home%20Assistent/sketch/sketch.ino): Microcontroller C++ firmware driving the 104-LED matrix animations for Idle (`0`), Listening (`1`), Processing (`2`), and Speaking (`3`) states.
+- [`app.yaml`](app.yaml): Arduino App Lab project manifest declaring built-in and custom bricks.
+- [`.env.example`](.env.example) / [`.env`](.env): Local configuration for Home Assistant URL, Long-Lived Access Token, timezone, and audio hardware.
+- [`bricks/home_assistant_mapping/`](bricks/home_assistant_mapping/__init__.py): Custom pure-Python brick that fetches live `light.*` entity states from Home Assistant, injects context into the local LLM, parses single-pass JSON output, and executes Home Assistant REST service calls (`light.turn_on`, `light.turn_off`, `light.toggle`).
+- [`bricks/kokoro_tts/`](bricks/kokoro_tts/__init__.py): Custom containerized brick running the local Kokoro-82M ONNX TTS engine.
+- [`python/main.py`](python/main.py): Main orchestrator loop managing wake word detection, streaming ASR, Home Assistant context injection, LLM inference, light control execution, and TTS playback.
+- [`sketch/sketch.ino`](sketch/sketch.ino): Microcontroller C++ firmware driving the 104-LED matrix animations for Idle (`0`), Listening (`1`), Processing (`2`), and Speaking (`3`) states.
 
 ## Setup & Configuration
 
@@ -26,7 +26,34 @@ A 100% local, privacy-first smart home voice assistant built with **Arduino App 
    ```
    *(Tip: If `host.docker.internal` does not resolve on your Linux Docker setup, set `HA_URL` to your Ventuno Q's local LAN IP or Docker bridge IP, e.g. `http://172.17.0.1:8123`.)*
 
-3. **Deploy to `~/ArduinoApps` on the Ventuno Q** and run via Arduino App Lab.
+3. **Deploy to `~/ArduinoApps` on the Ventuno Q** and run via Arduino App Lab:
+
+   1. Copy the repository directory to the board's `~/ArduinoApps` folder:
+      ```bash
+      scp -r ../ventuno_q_voice_home_assistant arduino@<board-ip-or-hostname>:~/ArduinoApps
+      ```
+
+   2. SSH into the board:
+      ```bash
+      ssh arduino@<board-ip-or-hostname>
+      ```
+
+   3. Build the Docker image for the custom `kokoro_tts` brick (this also downloads the ONNX model if not already present):
+      ```bash
+      docker build -t ventuno_q_voice_home_assistant-kokoro_tts:latest ~/ArduinoApps/ventuno_q_voice_home_assistant/bricks/kokoro_tts/container
+      ```
+      *(Note: `home_assistant_mapping` is a pure-Python brick with zero external dependencies that runs directly inside the main application process, so it does not require a `docker build` step.)*
+
+   4. Configure the built-in ASR and Keyword Spotting bricks:
+      ```bash
+      arduino-app-cli app brick config user:ventuno_q_voice_home_assistant arduino:asr --model whisper-small-quantized
+      arduino-app-cli app brick config user:ventuno_q_voice_home_assistant arduino:keyword_spotting --model keyword-spotting-hey-arduino
+      ```
+
+   5. Start the application:
+      ```bash
+      arduino-app-cli app start user:ventuno_q_voice_home_assistant
+      ```
 
 ## Supported Voice Commands
 
