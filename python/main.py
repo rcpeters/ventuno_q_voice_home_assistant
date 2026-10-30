@@ -24,6 +24,8 @@ ALSA_DEVICE = os.getenv("ALSA_PLAYBACK_DEVICE", "plughw:1,0")
 KOKORO_VOICE = os.getenv("KOKORO_VOICE", "af_heart")
 KOKORO_SPEED = float(os.getenv("KOKORO_SPEED", "1.0"))
 KOKORO_LANG = os.getenv("KOKORO_LANG", "en-us")
+KEYWORD_CONFIDENCE = float(os.getenv("KEYWORD_CONFIDENCE", "0.90"))
+KEYWORD_DEBOUNCE_SEC = float(os.getenv("KEYWORD_DEBOUNCE_SEC", "2.0"))
 
 # Sound assets configuration
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -94,7 +96,11 @@ asr = AutomaticSpeechRecognition(mic_asr)
 app_state = "IDLE"
 user_text = ""
 
-spotter = KeywordSpotting(mic=mic_spotter, confidence=0.90, debounce_sec=2.0)
+spotter = KeywordSpotting(
+    mic=mic_spotter,
+    confidence=KEYWORD_CONFIDENCE,
+    debounce_sec=KEYWORD_DEBOUNCE_SEC,
+)
 
 # Automatically configure wake word from the selected model's labels
 available_classes = getattr(spotter.model_info, "labels", []) or []
