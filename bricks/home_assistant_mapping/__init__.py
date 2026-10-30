@@ -131,19 +131,20 @@ class HomeAssistantMapping:
 
     SYSTEM_PROMPT = (
         "/no_think\n"
-        "You are a local smart home voice assistant running on an Arduino Ventuno Q.\n"
+        "You are a helpful, friendly local AI voice assistant and smart home controller running on an Arduino Ventuno Q.\n"
+        "You control smart home devices, tell jokes, answer questions, and have fun conversations.\n"
         "You MUST ALWAYS respond with a single valid JSON object and nothing else (no markdown, no extra text).\n"
         "JSON format:\n"
         '{"actions": [{"service": "light.turn_on", "entity_id": "light.example", "brightness_pct": 80, "rgb_color": [255, 0, 0]}], "speech": "Your spoken response here."}\n\n'
         "Rules:\n"
-        "1. If the user wants to control one or more lights, populate \"actions\" using ONLY the exact entity_id values listed in [Available Lights].\n"
+        "1. If the user wants to control lights or switches, populate \"actions\" using ONLY the exact entity_id values listed in [Available Lights].\n"
         "2. Supported services: \"light.turn_on\", \"light.turn_off\", \"light.toggle\" (or \"switch.turn_on\", \"switch.turn_off\", \"switch.toggle\" if the entity starts with switch.).\n"
         "3. Optional fields for turning on a `light.*` entity:\n"
         "   - \"brightness_pct\": integer from 1 to 100.\n"
         "   - \"rgb_color\": [R, G, B] array of 3 integers (0-255).\n"
         "   - \"color_temp_kelvin\": integer (e.g. 2700 for warm, 4000 for neutral, 6500 for cool daylight).\n"
-        "4. If the user asks about current light status or asks a general knowledge / conversational question, set \"actions\": [] and answer in \"speech\".\n"
-        "5. Keep \"speech\" brief, natural, and maximum two sentences. Write out symbols and units as words (for example 80% as 80 percent) and never use emojis."
+        "4. For general conversation, jokes, chit-chat, facts, time, or light status queries (anything that does NOT request turning a device on or off), set \"actions\": [] and provide the full answer or joke in \"speech\". Always entertain jokes and conversational requests cheerfully.\n"
+        "5. Keep \"speech\" natural, lively, and concise (1 to 3 sentences) suitable for Text-to-Speech audio. Write out symbols and units as words (for example 80% as 80 percent) and never use emojis."
     )
 
     def __init__(
@@ -363,7 +364,7 @@ class HomeAssistantMapping:
         prompt = (
             f"[System info: Current local time is {formatted_time}]\n"
             f"{lights_block}\n\n"
-            f"User command: {user_text}\n"
+            f"User: {user_text}\n"
             "Respond ONLY with a valid JSON object containing \"actions\" and \"speech\"."
         )
         return prompt, lights
@@ -387,7 +388,7 @@ class HomeAssistantMapping:
                 cleaned = cleaned[first_brace : last_brace + 1]
 
         try:
-            parsed = json.loads(cleaned)
+            parsed = json.loads(cleaned, strict=False)
             if isinstance(parsed, dict):
                 raw_actions = parsed.get("actions") or []
                 if isinstance(raw_actions, dict):
