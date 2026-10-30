@@ -24,7 +24,6 @@ ALSA_DEVICE = os.getenv("ALSA_PLAYBACK_DEVICE", "plughw:1,0")
 KOKORO_VOICE = os.getenv("KOKORO_VOICE", "af_heart")
 KOKORO_SPEED = float(os.getenv("KOKORO_SPEED", "1.0"))
 KOKORO_LANG = os.getenv("KOKORO_LANG", "en-us")
-CONFIGURED_WAKE_WORD = os.getenv("WAKE_WORD", "Ventuno")
 
 print("=" * 50)
 print("🏠 PHASE 0: Initializing Home Assistant Mapping...")
@@ -72,14 +71,19 @@ user_text = ""
 
 spotter = KeywordSpotting(mic=mic_spotter, confidence=0.90, debounce_sec=2.0)
 
-available_classes = spotter.model_info.labels
+# Automatically configure wake word from the selected model's labels
+available_classes = getattr(spotter.model_info, "labels", []) or []
 valid_keywords = [
     c
     for c in available_classes
     if c.lower()
     not in ["noise", "unknown", "_noise", "_unknown", "z-openset", "background"]
 ]
-target_keyword = valid_keywords[0] if valid_keywords else CONFIGURED_WAKE_WORD
+if not valid_keywords:
+    model_name = getattr(spotter.model_info, "name", "")
+    valid_keywords = [model_name] if model_name else ["Hey Arduino"]
+
+target_keyword = valid_keywords[0]
 
 
 def on_keyword_detected():
@@ -89,7 +93,8 @@ def on_keyword_detected():
         app_state = "LISTENING"
 
 
-spotter.on_detect(target_keyword, on_keyword_detected)
+for kw in valid_keywords:
+    spotter.on_detect(kw, on_keyword_detected)
 
 mic_spotter.start()
 asr.start()

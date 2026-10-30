@@ -21,7 +21,6 @@ A 100% local, privacy-first smart home voice assistant built with **Arduino App 
    HA_TOKEN=your_long_lived_access_token_here
    HA_TIMEOUT_SEC=3.0
    TIMEZONE=America/Santo_Domingo
-   WAKE_WORD=Ventuno
    ALSA_PLAYBACK_DEVICE=plughw:1,0
    ```
    *(Tip: If `host.docker.internal` does not resolve on your Linux Docker setup, set `HA_URL` to your Ventuno Q's local LAN IP or Docker bridge IP, e.g. `http://172.17.0.1:8123`.)*
