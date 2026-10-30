@@ -14,7 +14,7 @@ A 100% local, privacy-first smart home voice assistant built with **Arduino App 
 
 ## Setup & Configuration
 
-1. **Ensure Home Assistant is running in Docker on the Ventuno Q** (default port `8123`) and generate a **Long-Lived Access Token** from your Home Assistant Profile page.
+1. **Ensure Home Assistant is running in Docker on the Ventuno Q** (default port `8123`) and generate a **Long-Lived Access Token** from your Home Assistant Profile page. [Instructions](https://docs.arduino.cc/tutorials/ventuno-q/home-assistant/).
 2. **Configure `.env`**:
    Edit `.env` in the project root:
    ```ini
