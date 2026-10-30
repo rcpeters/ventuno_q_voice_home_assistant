@@ -68,3 +68,7 @@ A 100% local, privacy-first smart home voice assistant built with **Arduino App 
 - **State queries & General Knowledge**:
   - *"Which lights are currently on?"*
   - *"What time is it?"* or any general conversational prompt.
+
+## Acknowledgements
+
+This project is built upon and inspired by the voice assistant architecture created by [@mcmchris](https://github.com/mcmchris) in [`keyword-asr-local-llm-kokoro-tts`](https://github.com/mcmchris/keyword-asr-local-llm-kokoro-tts), which laid the foundation for running local keyword spotting, quantized Whisper ASR, local NPU LLM inference, and Kokoro TTS on the Arduino Ventuno Q.
