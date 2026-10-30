@@ -34,6 +34,12 @@ A 100% local, privacy-first smart home voice assistant built with **Arduino App 
       ```bash
       scp -r ../ventuno_q_voice_home_assistant arduino@<board-ip-or-hostname>:~/ArduinoApps
       ```
+      or using `rsync` (faster incremental transfer, preserves existing remote files):
+      ```bash
+      rsync -avz --exclude='.git' ../ventuno_q_voice_home_assistant arduino@<board-ip-or-hostname>:~/ArduinoApps/
+      ```
+      *(Tip: If running from inside the repository directory, use `rsync -avz --exclude='.git' ./ arduino@<board-ip-or-hostname>:~/ArduinoApps/ventuno_q_voice_home_assistant`)*
+
 
    2. SSH into the board:
       ```bash
