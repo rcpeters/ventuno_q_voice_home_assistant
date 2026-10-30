@@ -25,6 +25,31 @@ KOKORO_VOICE = os.getenv("KOKORO_VOICE", "af_heart")
 KOKORO_SPEED = float(os.getenv("KOKORO_SPEED", "1.0"))
 KOKORO_LANG = os.getenv("KOKORO_LANG", "en-us")
 
+# Sound assets configuration
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _resolve_sound_file(filename: str) -> str | None:
+    candidates = [
+        os.path.join(BASE_DIR, "assets", filename),
+        os.path.join(BASE_DIR, "assests", filename),
+    ]
+    if filename.endswith(".wav"):
+        candidates.append(os.path.join(BASE_DIR, "assets", filename + "e"))
+        candidates.append(os.path.join(BASE_DIR, "assests", filename + "e"))
+    elif filename.endswith(".wave"):
+        stem = filename[:-1]
+        candidates.append(os.path.join(BASE_DIR, "assets", stem))
+        candidates.append(os.path.join(BASE_DIR, "assests", stem))
+
+    for path in candidates:
+        if os.path.isfile(path):
+            return path
+    return None
+
+
+BOOP_SOUND_PATH = _resolve_sound_file("boop.wav")
+
 print("=" * 50)
 print("🏠 PHASE 0: Initializing Home Assistant Mapping...")
 print("=" * 50)
@@ -116,11 +141,15 @@ def loop():
         user_text = ""
         partial_text = ""
 
-        mic_asr.start()
-        time.sleep(0.1)
-
         # STATE 1: LISTENING
         Bridge.call("set_state", 1)
+
+        # Play audio cue when the assistant starts listening
+        if BOOP_SOUND_PATH and os.path.exists(BOOP_SOUND_PATH):
+            os.system(f"aplay -D {ALSA_DEVICE} {BOOP_SOUND_PATH} -q")
+
+        mic_asr.start()
+        time.sleep(0.1)
 
         print("\n🟢 ASR ACTIVE: Tell me your command! (Speak now)...")
 

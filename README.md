@@ -5,6 +5,7 @@ A 100% local, privacy-first smart home voice assistant built with **Arduino App 
 ## Project Structure
 
 - [`app.yaml`](app.yaml): Arduino App Lab project manifest declaring built-in and custom bricks.
+- [`assets/`](assets/): Audio cues and media assets (e.g. `boop.wav` listening cue).
 - [`.env.example`](.env.example) / [`.env`](.env): Local configuration for Home Assistant URL, Long-Lived Access Token, timezone, and audio hardware.
 - [`bricks/home_assistant_mapping/`](bricks/home_assistant_mapping/__init__.py): Custom pure-Python brick that fetches live `light.*` entity states from Home Assistant, injects context into the local LLM, parses single-pass JSON output, and executes Home Assistant REST service calls (`light.turn_on`, `light.turn_off`, `light.toggle`).
 - [`bricks/kokoro_tts/`](bricks/kokoro_tts/__init__.py): Custom containerized brick running the local Kokoro-82M ONNX TTS engine.
