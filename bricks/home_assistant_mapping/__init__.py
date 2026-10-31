@@ -248,7 +248,7 @@ class HomeAssistantMapping:
         self,
         use_cache_on_error: bool = True,
         log_discovered: bool = False,
-        cache_ttl_sec: float = 15.0,
+        cache_ttl_sec: float = 100005.0,
     ) -> list[dict[str, Any]]:
         """Fetch live `light.*` (and `switch.*`) states from Home Assistant `/api/states`."""
         if not self.ha_token:

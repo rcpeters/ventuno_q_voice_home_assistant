@@ -144,6 +144,38 @@ print("✅ Kokoro TTS ready.")
 mic = Microphone(device=Microphone.USB_MIC_1, shared=True)
 asr = AutomaticSpeechRecognition(mic, language="en")
 
+# Automatically recover if `audio-analytics-runner` ever has a stale session open
+_last_asr_session_id: str | None = None
+_orig_create_session = asr._create_transcription_session
+
+
+def _tracked_create_session(*args, **kwargs) -> str:
+    global _last_asr_session_id
+    try:
+        sid = _orig_create_session(*args, **kwargs)
+        _last_asr_session_id = sid
+        return sid
+    except Exception as e:
+        msg = str(e)
+        m = re.search(
+            r"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})",
+            msg,
+        )
+        stale_id = m.group(1) if m else _last_asr_session_id
+        if stale_id:
+            try:
+                asr._close_transcription_session(stale_id)
+            except Exception:
+                pass
+            time.sleep(0.2)
+            sid = _orig_create_session(*args, **kwargs)
+            _last_asr_session_id = sid
+            return sid
+        raise
+
+
+asr._create_transcription_session = _tracked_create_session  # type: ignore[method-assign]
+
 app_state = "IDLE"
 user_text = ""
 
@@ -257,11 +289,12 @@ def loop():
                     Bridge.call("set_state", 0)
                     app_state = "IDLE"
 
-        except (ReadTimeout, ConnectionError, RuntimeError):
-            time.sleep(0.2)
+        except (ReadTimeout, ConnectionError, RuntimeError) as e:
+            print(f"\n⚠️ ASR stream error: {e}")
+            time.sleep(0.5)
         except Exception as e:
             print(f"\n⚠️ ASR stream error: {e}")
-            time.sleep(0.2)
+            time.sleep(0.5)
         return
 
     elif app_state == "PROCESSING":
@@ -341,6 +374,7 @@ def loop():
         Bridge.call("set_state", 0)  # Turn off LED matrix
         user_text = ""
         app_state = "IDLE"
+        print(f"💤 Listening for '{WAKE_WORD}'...")
 
 
 try:
