@@ -131,20 +131,14 @@ class HomeAssistantMapping:
 
     SYSTEM_PROMPT = (
         "/no_think\n"
-        "You are a helpful, friendly local AI voice assistant and smart home controller running on an Arduino Ventuno Q.\n"
-        "You control smart home devices, tell jokes, answer questions, and have fun conversations.\n"
-        "You MUST ALWAYS respond with a single valid JSON object and nothing else (no markdown, no extra text).\n"
-        "JSON format:\n"
-        '{"actions": [{"service": "light.turn_on", "entity_id": "light.example", "brightness_pct": 80, "rgb_color": [255, 0, 0]}], "speech": "Your spoken response here."}\n\n'
+        "You are a fast, friendly local AI voice assistant and smart home controller on an Arduino Ventuno Q.\n"
+        "Respond ONLY with a single valid JSON object:\n"
+        '{"actions": [{"service": "light.turn_on", "entity_id": "light.example", "brightness_pct": 80, "rgb_color": [255, 0, 0]}], "speech": "Short spoken reply."}\n'
         "Rules:\n"
-        "1. If the user wants to control lights or switches, populate \"actions\" using ONLY the exact entity_id values listed in [Available Lights].\n"
-        "2. Supported services: \"light.turn_on\", \"light.turn_off\", \"light.toggle\" (or \"switch.turn_on\", \"switch.turn_off\", \"switch.toggle\" if the entity starts with switch.).\n"
-        "3. Optional fields for turning on a `light.*` entity:\n"
-        "   - \"brightness_pct\": integer from 1 to 100.\n"
-        "   - \"rgb_color\": [R, G, B] array of 3 integers (0-255).\n"
-        "   - \"color_temp_kelvin\": integer (e.g. 2700 for warm, 4000 for neutral, 6500 for cool daylight).\n"
-        "4. For general conversation, jokes, chit-chat, facts, time, or light status queries (anything that does NOT request turning a device on or off), set \"actions\": [] and provide the full answer or joke in \"speech\". Always entertain jokes and conversational requests cheerfully.\n"
-        "5. Keep \"speech\" natural, lively, and concise (1 to 3 sentences) suitable for Text-to-Speech audio. Write out symbols and units as words (for example 80% as 80 percent) and never use emojis."
+        "1. Use ONLY exact entity_id values from [Available Lights]. Services: light.turn_on, light.turn_off, light.toggle (or switch.turn_on, switch.turn_off, switch.toggle).\n"
+        "2. Optional light.turn_on fields: brightness_pct (1-100), rgb_color ([R,G,B]), color_temp_kelvin (2700-6500).\n"
+        "3. For jokes, questions, chat, time, or status queries (not changing device state), set \"actions\": [] and answer cheerfully in \"speech\".\n"
+        "4. Keep \"speech\" concise (1-2 sentences), write symbols as words (80 percent), no emojis."
     )
 
     def __init__(
@@ -251,10 +245,20 @@ class HomeAssistantMapping:
     # ─────────────────── Entity Discovery ───────────────────
 
     def get_lights(
-        self, use_cache_on_error: bool = True, log_discovered: bool = False
+        self,
+        use_cache_on_error: bool = True,
+        log_discovered: bool = False,
+        cache_ttl_sec: float = 15.0,
     ) -> list[dict[str, Any]]:
         """Fetch live `light.*` (and `switch.*`) states from Home Assistant `/api/states`."""
         if not self.ha_token:
+            return self._cached_lights
+
+        if (
+            not log_discovered
+            and self._cached_lights
+            and (time.monotonic() - self._last_fetch_ts) < cache_ttl_sec
+        ):
             return self._cached_lights
 
         try:
@@ -490,6 +494,7 @@ class HomeAssistantMapping:
 
             try:
                 resp = self._post(endpoint, payload)
+                self._last_fetch_ts = 0.0  # Invalidate state cache after state change
                 print(f"✅ [HA Tool Success] {domain}.{service} executed on {entity_id}")
                 results.append({"action": action, "ok": True, "response": resp})
             except urlerror.HTTPError as exc:

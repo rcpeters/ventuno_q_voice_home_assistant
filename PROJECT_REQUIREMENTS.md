@@ -1,7 +1,7 @@
 # Project Requirements: Smart Home Assistant with Local AI on Arduino Ventuno Q
 
 ## 1. Project Overview
-Build a privacy-first, locally hosted smart home voice assistant running on an **Arduino Ventuno Q**. The system combines **Home Assistant** for device automation with a local voice pipeline (**Wake Word + ASR + Local LLM + Kokoro TTS**) built in **Arduino App Lab**, enabling natural-language voice commands to control smart home devices without relying on cloud services.
+Build a privacy-first, locally hosted smart home voice assistant running on an **Arduino Ventuno Q**. The system combines **Home Assistant** for device automation with a local voice pipeline (**Whisper Small Wake-Word & ASR + Local LLM + Kokoro TTS**) built in **Arduino App Lab**, enabling natural-language voice commands to control smart home devices without relying on cloud services.
 
 ---
 
@@ -9,19 +9,20 @@ Build a privacy-first, locally hosted smart home voice assistant running on an *
 
 ### Hardware
 - **Compute Platform:** Arduino Ventuno Q
-- **Audio Input/Output:** Microphone (for wake word & voice commands) and speaker (for TTS responses)
+- **Audio Input/Output:** Single shared USB Microphone (for Whisper wake-word detection & voice commands) and speaker (for TTS responses)
 
 ### Software Stack
 - **Home Automation Hub:** Home Assistant running locally in a Docker container on the Ventuno Q
 - **AI & Voice Pipeline (Arduino App Lab):**
-  - Based on the [`keyword-asr-local-llm-kokoro-tts`](https://docs.arduino.cc/tutorials/ventuno-q/local-ai-assistant/) application architecture
-  - Combines existing Arduino App Lab Bricks with a custom/modified Brick for Home Assistant integration
+  - Evolved from the [`keyword-asr-local-llm-kokoro-tts`](https://docs.arduino.cc/tutorials/ventuno-q/local-ai-assistant/) application architecture
+  - **Architectural Decision (Whisper Small over Keyword Spotting):** Instead of using a separate `KeywordSpotting` TinyML model (which suffered from false positives and required dual-microphone/session switching overhead), the system uses **Whisper Small (`whisper-small-quantized`)** via the `AutomaticSpeechRecognition` (`arduino:asr`) brick in a single continuous streaming session for both wake-word detection (`WAKE_WORD="Hey Arduino"`, including phonetic variants and inline commands) and command transcription.
+  - Combines the `arduino:asr` and `arduino:llm` Bricks with custom `home_assistant_mapping` and `kokoro_tts` Bricks.
 
 ```mermaid
 flowchart LR
-    Mic["Microphone"] --> WakeASR["Keyword Spotting & Local ASR"]
-    WakeASR --> LLM["Custom Local LLM Brick"]
-    LLM <-->|Local API / Tool Calls| HA["Home Assistant (Docker)"]
+    Mic["Microphone (Single Shared Instance)"] --> WakeASR["Whisper Small ASR (Wake Word + Command Stream)"]
+    WakeASR --> LLM["Local LLM + Home Assistant Mapping Brick"]
+    LLM <-->|Local REST API| HA["Home Assistant (Docker)"]
     LLM --> TTS["Kokoro TTS Brick"]
     TTS --> Speaker["Speaker"]
 ```
@@ -31,12 +32,13 @@ flowchart LR
 ## 3. Functional Requirements
 
 ### 3.1 Home Assistant Core
-- [ ] Run Home Assistant locally inside a Docker container on the Arduino Ventuno Q.
-- [ ] Expose local API endpoints (REST API / WebSocket API / Long-Lived Access Token) for local inter-container communication.
+- [x] Run Home Assistant locally inside a Docker container on the Arduino Ventuno Q.
+- [x] Expose local API endpoints (REST API / WebSocket API / Long-Lived Access Token) for local inter-container communication.
 
-### 3.2 Voice Input & Speech-to-Text (ASR)
-- [ ] Continuously listen for a local wake word / keyword.
-- [ ] Transcribe spoken user commands locally into text using the ASR brick.
+### 3.2 Voice Input & Speech-to-Text (Whisper Small Wake Word & ASR)
+- [x] Use **Whisper Small (`whisper-small-quantized`)** directly instead of a dedicated `KeywordSpotting` model to eliminate false wake-word triggers.
+- [x] Continuously listen for the configurable wake word (`WAKE_WORD` in `.env`, default `"Hey Arduino"`) and seamlessly transition into command capture within the same ASR stream (or immediately execute inline commands spoken in the same breath as the wake word).
+- [x] Transcribe spoken user commands locally into text using a single `Microphone` instance shared with the `AutomaticSpeechRecognition` brick.
 
 ### 3.3 Custom Local LLM Brick (Home Assistant Integration)
 - [ ] Base the custom brick on the `keyword-asr-local-llm-kokoro-tts` LLM pipeline.

@@ -1,5 +1,8 @@
 import json
 import os
+import re
+import subprocess
+import threading
 import time
 import urllib.error
 from datetime import datetime
@@ -12,7 +15,6 @@ from arduino.app_utils import App, Bridge  # type: ignore[import-not-found] # py
 from arduino.app_bricks.llm import LargeLanguageModel  # type: ignore[import-not-found] # pyright: ignore[reportMissingImports]
 from arduino.app_bricks.asr import AutomaticSpeechRecognition  # type: ignore[import-not-found] # pyright: ignore[reportMissingImports]
 from arduino.app_peripherals.microphone import Microphone  # type: ignore[import-not-found] # pyright: ignore[reportMissingImports]
-from arduino.app_bricks.keyword_spotting import KeywordSpotting  # type: ignore[import-not-found] # pyright: ignore[reportMissingImports]
 from kokoro_tts import KokoroTTS  # type: ignore[import-not-found] # pyright: ignore[reportMissingImports]
 from home_assistant_mapping import HomeAssistantMapping, load_dotenv_file  # type: ignore[import-not-found] # pyright: ignore[reportMissingImports]
 
@@ -20,12 +22,11 @@ from home_assistant_mapping import HomeAssistantMapping, load_dotenv_file  # typ
 load_dotenv_file()
 
 TIMEZONE_NAME = os.getenv("TIMEZONE", "America/Los_Angeles")
+WAKE_WORD = os.getenv("WAKE_WORD", "Hey Arduino")
 ALSA_DEVICE = os.getenv("ALSA_PLAYBACK_DEVICE", "plughw:1,0")
 KOKORO_VOICE = os.getenv("KOKORO_VOICE", "af_heart")
 KOKORO_SPEED = float(os.getenv("KOKORO_SPEED", "1.0"))
 KOKORO_LANG = os.getenv("KOKORO_LANG", "en-us")
-KEYWORD_CONFIDENCE = float(os.getenv("KEYWORD_CONFIDENCE", "0.90"))
-KEYWORD_DEBOUNCE_SEC = float(os.getenv("KEYWORD_DEBOUNCE_SEC", "2.0"))
 
 # Sound assets configuration
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -52,6 +53,57 @@ def _resolve_sound_file(filename: str) -> str | None:
 
 BOOP_SOUND_PATH = _resolve_sound_file("boop.wav")
 
+# Common phonetic transcriptions Whisper Small produces for "Hey Arduino"
+WAKE_PHONETIC_VARIANTS = {
+    "hey arduino",
+    "arduino",
+    "ardino",
+    "arduina",
+    "adreno",
+    "audrino",
+    "alduino",
+    "hardwino",
+    "ardwino",
+    "ardweeno",
+    "eduino",
+    "erduino",
+    "are you know",
+    "or do we know",
+    "how do we know",
+}
+
+
+def match_wake_word(text: str, target_wake_word: str) -> tuple[bool, str]:
+    """Check if `text` contains the wake word and return `(matched, inline_command_after_wake_word)`."""
+    cleaned = re.sub(r"\[.*?\]|\(.*?\)|\*.*?\*", " ", text or "").strip()
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    if not cleaned:
+        return False, ""
+
+    norm = re.sub(r"[^a-zA-Z0-9\s]", " ", cleaned).strip().lower()
+    norm = re.sub(r"\s+", " ", norm)
+    if not norm:
+        return False, ""
+
+    variants = set(WAKE_PHONETIC_VARIANTS)
+    target_norm = re.sub(r"[^a-zA-Z0-9\s]", " ", target_wake_word).strip().lower()
+    target_norm = re.sub(r"\s+", " ", target_norm)
+    if target_norm:
+        variants.add(target_norm)
+
+    # Sort longest first so "hey arduino" matches before "arduino"
+    for variant in sorted(variants, key=len, reverse=True):
+        pattern = rf"(?:^|\b)(?:hey\s+)?{re.escape(variant)}[\s,.:;!?-]*(.*)$"
+        m = re.search(pattern, cleaned, flags=re.IGNORECASE)
+        if m:
+            trailing_command = m.group(1).strip()
+            return True, trailing_command
+        if variant in norm:
+            return True, ""
+
+    return False, ""
+
+
 print("=" * 50)
 print("🏠 PHASE 0: Initializing Home Assistant Mapping...")
 print("=" * 50)
@@ -66,7 +118,7 @@ print("=" * 50)
 llm = LargeLanguageModel(
     system_prompt=HomeAssistantMapping.SYSTEM_PROMPT
 )
-llm.with_memory(5)
+llm.with_memory(2)
 
 try:
     print("⏳ Moving ~8GB of data to NPU. Please wait a moment...")
@@ -89,118 +141,128 @@ print("⏳ Warming Up Kokoro TTS...")
 tts.warmup()
 print("✅ Kokoro TTS ready.")
 
-mic_spotter = Microphone(device=Microphone.USB_MIC_1, shared=True)
-mic_asr = Microphone(device=Microphone.USB_MIC_1, shared=True)
-asr = AutomaticSpeechRecognition(mic_asr)
+mic = Microphone(device=Microphone.USB_MIC_1, shared=True)
+asr = AutomaticSpeechRecognition(mic, language="en")
 
 app_state = "IDLE"
 user_text = ""
 
-spotter = KeywordSpotting(
-    mic=mic_spotter,
-    confidence=KEYWORD_CONFIDENCE,
-    debounce_sec=KEYWORD_DEBOUNCE_SEC,
-)
-
-# Automatically configure wake word from the selected model's labels
-available_classes = getattr(spotter.model_info, "labels", []) or []
-valid_keywords = [
-    c
-    for c in available_classes
-    if c.lower()
-    not in ["noise", "unknown", "_noise", "_unknown", "z-openset", "background"]
-]
-if not valid_keywords:
-    model_name = getattr(spotter.model_info, "name", "")
-    valid_keywords = [model_name] if model_name else ["Hey Arduino"]
-
-target_keyword = valid_keywords[0]
-
-
-def on_keyword_detected():
-    global app_state
-    if app_state == "IDLE":
-        print(f"\n✨ Wake word '{target_keyword}' detected!")
-        app_state = "LISTENING"
-
-
-for kw in valid_keywords:
-    spotter.on_detect(kw, on_keyword_detected)
-
-mic_spotter.start()
+mic.start()
 asr.start()
-spotter.start()
 
+def _wait_for_asr_session_close(timeout_sec: float = 2.0) -> None:
+    """Wait until the active ASR session has finished closing so the NPU is free for LLM inference."""
+    deadline = time.monotonic() + timeout_sec
+    while asr.is_transcribing() and time.monotonic() < deadline:
+        time.sleep(0.05)
+
+
+# Lower VAD hangover from 700ms to 400ms and flush interval from 5s to 2s so Whisper emits transcripts much faster
+asr._DEFAULT_VAD_MS = 400
+asr._FLUSH_INTERVAL_SECONDS = 2
 # STATE 0: IDLE
 Bridge.call("set_state", 0)
-print(f"\n✅ All systems online! 💤 Listening for '{target_keyword}'...")
+print(f"\n✅ All systems online! 💤 Whisper Small is listening for '{WAKE_WORD}'...")
 
 
 def loop():
     global app_state, user_text
 
     if app_state == "IDLE":
-        time.sleep(0.1)
-        return
-
-    elif app_state == "LISTENING":
-        user_text = ""
-        partial_text = ""
-
-        # STATE 1: LISTENING
-        Bridge.call("set_state", 1)
-
-        # Play audio cue when the assistant starts listening
-        if BOOP_SOUND_PATH and os.path.exists(BOOP_SOUND_PATH):
-            os.system(f"aplay -D {ALSA_DEVICE} {BOOP_SOUND_PATH} -q")
-
-        mic_asr.start()
-        time.sleep(0.1)
-
-        print("\n🟢 ASR ACTIVE: Tell me your command! (Speak now)...")
-
         try:
-            with asr.transcribe_stream(duration=7) as stream:
+            # Keep a single continuous ASR session open across wake word AND command!
+            # When the wake word is heard, we flip to LISTENING and play `boop.wav` IN-PLACE
+            # without closing/re-opening the ASR session (zero session teardown/startup delay).
+            user_text = ""
+            in_command_mode = False
+            cmd_deadline = 0.0
+            last_partial_ts = 0.0
+            wake_prefix_text = ""
+            partial_text = ""
+
+            with asr.transcribe_stream(duration=20) as stream:
                 for chunk in stream:
-                    match chunk.type:
-                        case "partial_text":
-                            print(f"\r👂 Listening: {chunk.data}", end="", flush=True)
-                            partial_text = chunk.data.strip()
-                        case "full_text":
-                            user_text = chunk.data.strip()
-                            break
+                    text = chunk.data.strip()
+                    if not text:
+                        continue
 
-        # --- ASR EXCEPTION HANDLING ---
-        except (ReadTimeout, ConnectionError) as e:
-            print(f"\n⚠️ Container Connection Timeout: {e}")
-            user_text = ""
-        except RuntimeError as e:
-            print(f"\n⚠️ ASR Container Crashed (Timeout): {e}")
-            user_text = ""
+                    if not in_command_mode:
+                        matched, inline_cmd = match_wake_word(text, WAKE_WORD)
+                        if matched:
+                            print(f"\n✨ Wake word detected by Whisper ('{text}')!")
+                            if inline_cmd and len(inline_cmd.split()) >= 2:
+                                user_text = inline_cmd
+                                print(f"🗣️ Inline command captured: {user_text}")
+                                Bridge.call("set_state", 2)
+                                app_state = "PROCESSING"
+                                asr.cancel()
+                            else:
+                                # Transition to LISTENING immediately inside the SAME ASR stream!
+                                in_command_mode = True
+                                wake_prefix_text = text if chunk.type == "partial_text" else ""
+                                Bridge.call("set_state", 1)
+                                if BOOP_SOUND_PATH and os.path.exists(BOOP_SOUND_PATH):
+                                    subprocess.Popen(
+                                        ["aplay", "-D", ALSA_DEVICE, BOOP_SOUND_PATH, "-q"],
+                                        stdout=subprocess.DEVNULL,
+                                        stderr=subprocess.DEVNULL,
+                                    )
+                                print("\n🟢 ASR ACTIVE: Tell me your command! (Speak now)...")
+                                # Schedule a background watchdog that cancels ASR as soon as
+                                # 0.7s of silence elapses after the last partial_text (or 7s max timeout)
+                                cmd_deadline = time.monotonic() + 7.0
+
+                                def _command_watchdog():
+                                    while in_command_mode and asr.is_transcribing():
+                                        now_ts = time.monotonic()
+                                        if now_ts >= cmd_deadline:
+                                            asr.cancel()
+                                            return
+                                        if partial_text and last_partial_ts > 0.0 and (now_ts - last_partial_ts) >= 0.7:
+                                            asr.cancel()
+                                            return
+                                        time.sleep(0.05)
+
+                                threading.Thread(target=_command_watchdog, daemon=True).start()
+                    else:
+                        # Strip the wake word if Whisper includes it in the same utterance
+                        _, stripped_cmd = match_wake_word(text, WAKE_WORD)
+                        cmd_candidate = stripped_cmd if stripped_cmd else (
+                            "" if text.lower() == wake_prefix_text.lower() else text
+                        )
+                        if not cmd_candidate:
+                            continue
+
+                        match chunk.type:
+                            case "partial_text":
+                                print(f"\r👂 Listening: {cmd_candidate}", end="", flush=True)
+                                if cmd_candidate != partial_text:
+                                    partial_text = cmd_candidate
+                                    last_partial_ts = time.monotonic()
+                            case "full_text":
+                                user_text = cmd_candidate
+                                in_command_mode = False
+                                asr.cancel()
+
+            if in_command_mode or partial_text or user_text:
+                in_command_mode = False
+                if partial_text and not user_text:
+                    user_text = partial_text
+                if user_text:
+                    print(f"\n🗣️ You said: {user_text}")
+                    Bridge.call("set_state", 2)
+                    app_state = "PROCESSING"
+                else:
+                    print("\n🤷 No command heard or ASR timeout. Returning to sleep...")
+                    Bridge.call("set_state", 0)
+                    app_state = "IDLE"
+
+        except (ReadTimeout, ConnectionError, RuntimeError):
+            time.sleep(0.2)
         except Exception as e:
-            if partial_text and not user_text:
-                user_text = partial_text
-            else:
-                print(f"\n⚠️ Unexpected ASR Error: {e}")
-                user_text = ""
-        # ------------------------------
-
-        if partial_text and not user_text:
-            user_text = partial_text
-
-        time.sleep(1.5)  # Allow ASR hardware resources to release safely
-        mic_asr.stop()
-
-        if user_text:
-            print(f"\n🗣️ You said: {user_text}")
-            # STATE 2: PROCESSING
-            Bridge.call("set_state", 2)
-            app_state = "PROCESSING"
-        else:
-            print("\n🤷 No command heard or ASR timeout. Returning to sleep...")
-            Bridge.call("set_state", 0)  # Turn off LED matrix
-            app_state = "IDLE"
-            return
+            print(f"\n⚠️ ASR stream error: {e}")
+            time.sleep(0.2)
+        return
 
     elif app_state == "PROCESSING":
         raw_llm_output = ""
@@ -225,8 +287,6 @@ def loop():
                 print(chunk, end="", flush=True)
                 raw_llm_output += chunk
             print()
-
-            time.sleep(0.5)  # Allow NPU to release memory bus
 
             # Parse structured JSON into Home Assistant actions + spoken response
             actions, speech_response = ha_mapper.parse_llm_response(raw_llm_output)
@@ -279,6 +339,7 @@ def loop():
 
         print("\n🔄 Returning to sleep mode...")
         Bridge.call("set_state", 0)  # Turn off LED matrix
+        user_text = ""
         app_state = "IDLE"
 
 
@@ -287,10 +348,8 @@ try:
 except (KeyboardInterrupt, SystemExit):
     print("\nStopping application...")
 finally:
-    spotter.stop()
-    mic_spotter.stop()
-    mic_asr.stop()
     asr.stop()
+    mic.stop()
     ha_mapper.stop()
 
     try:
