@@ -372,6 +372,7 @@ def loop():
 
         print("\n🔄 Returning to sleep mode...")
         Bridge.call("set_state", 0)  # Turn off LED matrix
+        ha_mapper.refresh_cache()
         user_text = ""
         app_state = "IDLE"
         print(f"💤 Listening for '{WAKE_WORD}'...")

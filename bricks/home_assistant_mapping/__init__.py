@@ -248,17 +248,13 @@ class HomeAssistantMapping:
         self,
         use_cache_on_error: bool = True,
         log_discovered: bool = False,
-        cache_ttl_sec: float = 100005.0,
+        force_refresh: bool = False,
     ) -> list[dict[str, Any]]:
         """Fetch live `light.*` (and `switch.*`) states from Home Assistant `/api/states`."""
         if not self.ha_token:
             return self._cached_lights
 
-        if (
-            not log_discovered
-            and self._cached_lights
-            and (time.monotonic() - self._last_fetch_ts) < cache_ttl_sec
-        ):
+        if not force_refresh and not log_discovered and self._cached_lights:
             return self._cached_lights
 
         try:
@@ -333,6 +329,10 @@ class HomeAssistantMapping:
                 )
                 return self._cached_lights
             return []
+
+    def refresh_cache(self) -> list[dict[str, Any]]:
+        """Force-refresh cached Home Assistant light/switch states (e.g. when returning to sleep mode)."""
+        return self.get_lights(use_cache_on_error=True, force_refresh=True)
 
     def format_lights_context(self, lights: list[dict[str, Any]] | None = None) -> str:
         """Format discovered light states into a compact prompt block for the LLM."""
