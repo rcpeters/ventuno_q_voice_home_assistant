@@ -1,3 +1,4 @@
+import builtins
 import json
 import os
 import re
@@ -23,10 +24,52 @@ load_dotenv_file()
 
 TIMEZONE_NAME = os.getenv("TIMEZONE", "America/Los_Angeles")
 WAKE_WORD = os.getenv("WAKE_WORD", "Hey Arduino")
+LOG_WAKE_WORD_ASR = os.getenv("LOG_WAKE_WORD_ASR", "false").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
 ALSA_DEVICE = os.getenv("ALSA_PLAYBACK_DEVICE", "plughw:1,0")
 KOKORO_VOICE = os.getenv("KOKORO_VOICE", "af_heart")
 KOKORO_SPEED = float(os.getenv("KOKORO_SPEED", "1.0"))
 KOKORO_LANG = os.getenv("KOKORO_LANG", "en-us")
+
+# ─── Timestamped Console Logging ─────────────────────────────────────────
+_orig_print = builtins.print
+_at_line_start = True
+try:
+    _log_tz = ZoneInfo(TIMEZONE_NAME)
+except Exception:
+    _log_tz = None
+
+
+def _timestamped_print(*args, **kwargs) -> None:
+    global _at_line_start
+    sep = kwargs.get("sep", " ")
+    end = kwargs.get("end", "\n")
+    text = sep.join(str(a) for a in args)
+
+    now = datetime.now(_log_tz) if _log_tz else datetime.now()
+    ts = f"[{now.strftime('%H:%M:%S')}.{now.microsecond // 1000:03d}] "
+
+    if text.startswith("\r"):
+        text = "\r" + ts + text[1:]
+    elif text.startswith("\n"):
+        leading = len(text) - len(text.lstrip("\n"))
+        rest = text[leading:]
+        text = ("\n" * leading) + (ts + rest if rest else "")
+    elif _at_line_start and text:
+        text = ts + text
+
+    _at_line_start = end.endswith("\n")
+    pass_kwargs = {k: v for k, v in kwargs.items() if k != "sep"}
+    if "flush" not in pass_kwargs:
+        pass_kwargs["flush"] = True
+    _orig_print(text, **pass_kwargs)
+
+
+builtins.print = _timestamped_print
 
 # Sound assets configuration
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -182,14 +225,12 @@ user_text = ""
 mic.start()
 asr.start()
 
-def _wait_for_asr_session_close(timeout_sec: float = 2.0) -> None:
-    """Wait until the active ASR session has finished closing so the NPU is free for LLM inference."""
-    deadline = time.monotonic() + timeout_sec
-    while asr.is_transcribing() and time.monotonic() < deadline:
-        time.sleep(0.05)
+def _force_close_active_asr_session() -> None:
+    """Immediately cancel the active ASR session without blocking on HTTP `/transcriptions/close`."""
+    asr.cancel()
 
 
-# Lower VAD hangover from 700ms to 400ms and flush interval from 5s to 2s so Whisper emits transcripts much faster
+# Lower VAD hangover from 700ms to 400ms and flush every 2s so Whisper emits transcripts promptly
 asr._DEFAULT_VAD_MS = 400
 asr._FLUSH_INTERVAL_SECONDS = 2
 # STATE 0: IDLE
@@ -210,24 +251,33 @@ def loop():
             cmd_deadline = 0.0
             last_partial_ts = 0.0
             wake_prefix_text = ""
-            partial_text = ""
+            partial_tokens: list[str] = []
+            last_chunk_text = ""
+            last_idle_heard = ""
+            last_listening_heard = ""
 
-            with asr.transcribe_stream(duration=20) as stream:
+            # Use `duration=0` (unbounded) so the stream never cuts off mid-command if the user
+            # speaks the wake word near the end of a fixed 20s window!
+            with asr.transcribe_stream(duration=0) as stream:
                 for chunk in stream:
                     text = chunk.data.strip()
                     if not text:
                         continue
 
                     if not in_command_mode:
+                        if LOG_WAKE_WORD_ASR and text != last_idle_heard:
+                            last_idle_heard = text
+                            print(f"🎤 [Wake ASR]: {text}")
                         matched, inline_cmd = match_wake_word(text, WAKE_WORD)
                         if matched:
-                            print(f"\n✨ Wake word detected by Whisper ('{text}')!")
+                            print(f"✨ Wake word detected by Whisper ('{text}')!")
                             if inline_cmd and len(inline_cmd.split()) >= 2:
                                 user_text = inline_cmd
                                 print(f"🗣️ Inline command captured: {user_text}")
                                 Bridge.call("set_state", 2)
                                 app_state = "PROCESSING"
-                                asr.cancel()
+                                _force_close_active_asr_session()
+                                break
                             else:
                                 # Transition to LISTENING immediately inside the SAME ASR stream!
                                 in_command_mode = True
@@ -240,18 +290,17 @@ def loop():
                                         stderr=subprocess.DEVNULL,
                                     )
                                 print("\n🟢 ASR ACTIVE: Tell me your command! (Speak now)...")
-                                # Schedule a background watchdog that cancels ASR as soon as
-                                # 0.7s of silence elapses after the last partial_text (or 7s max timeout)
-                                cmd_deadline = time.monotonic() + 7.0
+                                # Give a full 8.0s window to start speaking, and finalize 1.0s after the last partial_text
+                                cmd_deadline = time.monotonic() + 8.0
 
                                 def _command_watchdog():
                                     while in_command_mode and asr.is_transcribing():
                                         now_ts = time.monotonic()
                                         if now_ts >= cmd_deadline:
-                                            asr.cancel()
+                                            _force_close_active_asr_session()
                                             return
-                                        if partial_text and last_partial_ts > 0.0 and (now_ts - last_partial_ts) >= 0.7:
-                                            asr.cancel()
+                                        if partial_tokens and last_partial_ts > 0.0 and (now_ts - last_partial_ts) >= 1.0:
+                                            _force_close_active_asr_session()
                                             return
                                         time.sleep(0.05)
 
@@ -267,27 +316,40 @@ def loop():
 
                         match chunk.type:
                             case "partial_text":
-                                print(f"\r👂 Listening: {cmd_candidate}", end="", flush=True)
-                                if cmd_candidate != partial_text:
-                                    partial_text = cmd_candidate
+                                # `transcript.text.delta` sends incremental segments ("Tell me.", "joke.")
+                                if cmd_candidate != last_chunk_text:
+                                    last_chunk_text = cmd_candidate
+                                    # If delta is a cumulative prefix extension, replace; otherwise append
+                                    if partial_tokens and cmd_candidate.lower().startswith(partial_tokens[-1].lower()):
+                                        partial_tokens[-1] = cmd_candidate
+                                    else:
+                                        partial_tokens.append(cmd_candidate)
                                     last_partial_ts = time.monotonic()
+                                combined_partial = " ".join(partial_tokens).strip()
+                                if combined_partial and combined_partial != last_listening_heard:
+                                    last_listening_heard = combined_partial
+                                    print(f"👂 Listening: {combined_partial}")
                             case "full_text":
                                 user_text = cmd_candidate
                                 in_command_mode = False
-                                asr.cancel()
+                                _force_close_active_asr_session()
+                                break
 
-            if in_command_mode or partial_text or user_text:
+            combined_partial = " ".join(partial_tokens).strip()
+            if in_command_mode or combined_partial or user_text:
                 in_command_mode = False
-                if partial_text and not user_text:
-                    user_text = partial_text
+                if combined_partial and (not user_text or len(combined_partial) > len(user_text)):
+                    user_text = combined_partial
                 if user_text:
-                    print(f"\n🗣️ You said: {user_text}")
+                    print(f"🗣️ You said: {user_text}")
                     Bridge.call("set_state", 2)
                     app_state = "PROCESSING"
                 else:
-                    print("\n🤷 No command heard or ASR timeout. Returning to sleep...")
+                    print("🤷 No command heard or ASR timeout. Returning to sleep...")
                     Bridge.call("set_state", 0)
+                    ha_mapper.refresh_cache()
                     app_state = "IDLE"
+                    print(f"💤 Listening for '{WAKE_WORD}'...")
 
         except (ReadTimeout, ConnectionError, RuntimeError) as e:
             print(f"\n⚠️ ASR stream error: {e}")
